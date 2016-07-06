@@ -40,7 +40,8 @@ from time import time
 from .version import __version__
 
 # Limits of the segments in Angstroms
-SKYSEG = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
+SKYSEG_MUSE = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
+SKYSEG_KMOS = [0, 10200, 10610, 10800, 11180, 11400, 11900, 12100, 12500, 12880, 13600]
 # Number of available CPUs
 NCPU = cpu_count()
 PY2 = sys.version_info[0] == 2
@@ -62,11 +63,11 @@ logger = logging.getLogger(__name__)
 ###############################################################################
 
 
-def process(musecubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
+def process(cubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
             zlevel='median', cftype='weight', cfwidthSVD=100, cfwidthSP=50,
             pevals=[], nevals=[], optimizeType='normal', extSVD=None,
             skycubefits=None, svdoutputfits='ZAP_SVD.fits', mask=None,
-            interactive=False):
+            interactive=False, instrument='MUSE'):
     """ Performs the entire ZAP sky subtraction algorithm.
 
     Work on an input FITS file and optionally writes the product to an output
@@ -75,7 +76,7 @@ def process(musecubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
     Parameters
     ----------
 
-    musecubefits : str
+    cubefits : str
         Input FITS file, containing a cube with data in the first extension.
     outcubefits : str
         Output FITS file, based on the input one to propagate all header
@@ -138,7 +139,7 @@ def process(musecubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
         False.
 
     """
-    if not isinstance(musecubefits, string_types):
+    if not isinstance(cubefits, string_types):
         raise TypeError('The process method only accepts a single datacube '
                         'filename.')
 
@@ -167,12 +168,12 @@ def process(musecubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
         # cfwidth values differ and extSVD is not given. Otherwise, the SVD
         # will be computed in the _run method, which allows to avoid running
         # twice the zlevel and continuumfilter steps.
-        SVDoutput(musecubefits, svdoutputfits=svdoutputfits,
+        SVDoutput(cubefits, svdoutputfits=svdoutputfits,
                   clean=clean, zlevel=zlevel, cftype=cftype,
                   cfwidth=cfwidthSVD, mask=mask)
         extSVD = svdoutputfits
 
-    zobj = zclass(musecubefits)
+    zobj = zclass(cubefits, instrument)
     zobj._run(clean=clean, zlevel=zlevel, cfwidth=cfwidthSP, cftype=cftype,
               pevals=pevals, nevals=nevals, optimizeType=optimizeType,
               extSVD=extSVD)
@@ -191,8 +192,8 @@ def process(musecubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
     zobj.mergefits(outcubefits)
 
 
-def SVDoutput(musecubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
-              zlevel='median', cftype='weight', cfwidth=100, mask=None):
+def SVDoutput(cubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
+              zlevel='median', cftype='weight', cfwidth=100, mask=None, instrument='MUSE'):
     """ Performs the SVD decomposition of a datacube.
 
     This allows to use the SVD for a different datacube.
@@ -200,7 +201,7 @@ def SVDoutput(musecubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
     Parameters
     ----------
 
-    musecubefits : str
+    cubefits : str
         Input FITS file, containing a cube with data in the first extension.
     svdoutputfits : str
         Output FITS file. Default to ZAP_SVD.fits
@@ -221,14 +222,14 @@ def SVDoutput(musecubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
 
     """
     logger.info('Running ZAP %s !', __version__)
-    logger.info('Processing %s to compute the SVD', musecubefits)
+    logger.info('Processing %s to compute the SVD', cubefits)
     check_file_exists(svdoutputfits)
 
     # Check for consistency between weighted median and zlevel keywords
     if cftype == 'weight' and zlevel == 'none':
         raise ValueError('Weighted median requires a zlevel calculation')
 
-    zobj = zclass(musecubefits)
+    zobj = zclass(cubefits, instrument)
 
     # clean up the nan values
     if clean:
@@ -255,7 +256,7 @@ def SVDoutput(musecubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
     zobj.writeSVD(svdoutputfits=svdoutputfits)
 
 
-def contsubfits(musecubefits, contsubfn='CONTSUB_CUBE.fits', cfwidth=100):
+def contsubfits(cubefits, contsubfn='CONTSUB_CUBE.fits', cfwidth=100):
     """ A multiprocessed implementation of the continuum removal.
 
     This process distributes the data to many processes that then reassemble
@@ -265,7 +266,7 @@ def contsubfits(musecubefits, contsubfn='CONTSUB_CUBE.fits', cfwidth=100):
 
     """
     check_file_exists(contsubfn)
-    hdu = fits.open(musecubefits)
+    hdu = fits.open(cubefits)
     data = hdu[1].data
     stack = data.reshape(data.shape[0], (data.shape[1] * data.shape[2]))
     contarray = _continuumfilter(stack, 'median', cfwidth=cfwidth)
@@ -277,7 +278,7 @@ def contsubfits(musecubefits, contsubfn='CONTSUB_CUBE.fits', cfwidth=100):
     hdu.close()
 
 
-def nancleanfits(musecubefits, outfn='NANCLEAN_CUBE.fits', rejectratio=0.25,
+def nancleanfits(cubefits, outfn='NANCLEAN_CUBE.fits', rejectratio=0.25,
                  boxsz=1):
     """
     Detects NaN values in cube and removes them by replacing them with an
@@ -287,7 +288,7 @@ def nancleanfits(musecubefits, outfn='NANCLEAN_CUBE.fits', rejectratio=0.25,
     Parameters
     ----------
 
-    musecubefits : str
+    cubefits : str
         Input FITS file, containing a cube with data in the first extension.
     outfn : str
         Output FITS file. Default to NANCLEAN_CUBE.fits
@@ -301,7 +302,7 @@ def nancleanfits(musecubefits, outfn='NANCLEAN_CUBE.fits', rejectratio=0.25,
 
     """
     check_file_exists(outfn)
-    hdu = fits.open(musecubefits)
+    hdu = fits.open(cubefits)
     cleancube = _nanclean(hdu[1].data, rejectratio=rejectratio, boxsz=boxsz)
     hdu[1].data = cleancube[0]
     hdu.writeto(outfn)
@@ -387,17 +388,17 @@ class zclass(object):
 
     """
 
-    def __init__(self, musecubefits):
+    def __init__(self, cubefits, instrument='MUSE'):
         """ Initialization of the zclass.
 
         Pulls the datacube into the class and trims it based on the known
         optimal spectral range of MUSE.
 
         """
-        hdu = fits.open(musecubefits)
+        hdu = fits.open(cubefits)
         self.cube = hdu[1].data
         self.header = hdu[1].header
-        self.musecubefits = musecubefits
+        self.cubefits = cubefits
         hdu.close()
 
         # Workaround for floating points errors in wcs computation: if cunit is
@@ -442,7 +443,13 @@ class zclass(object):
         laxmax = max(self.laxis)
 
         # List of segmentation limits in the optical
-        skyseg = np.array(SKYSEG)
+        if instrument == 'MUSE':
+           skyseg = np.array(SKYSEG_MUSE)
+        elif instrument == 'KMOS':
+           skyseg = np.array(SKYSEG_KMOS)
+        else:
+            raise ValueError('None or invalid instrument name given')
+
         skyseg = skyseg[(skyseg > laxmin) & (skyseg < laxmax)]
 
         # segment limit in angstroms
@@ -905,7 +912,7 @@ class zclass(object):
         # make sure it has the right extension
         outcubefits = outcubefits.split('.fits')[0] + '.fits'
         check_file_exists(outcubefits)
-        hdu = fits.open(self.musecubefits)
+        hdu = fits.open(self.cubefits)
         hdu[1].header = _newheader(self)
         hdu[1].data = self.cleancube
         hdu.writeto(outcubefits)
