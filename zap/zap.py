@@ -40,8 +40,9 @@ from time import time
 from .version import __version__
 
 # Limits of the segments in Angstroms
-SKYSEG_MUSE = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
-SKYSEG_KMOS = [0, 10200, 10610, 10800, 11180, 11400, 11900, 12100, 12500, 12880, 13600]
+SKYSEG_MUSE    = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
+SKYSEG_KMOS_YJ = [10220, 10610, 10800, 11180, 11400, 11900, 12100, 12500, 12880, 13450]
+
 # Number of available CPUs
 NCPU = cpu_count()
 PY2 = sys.version_info[0] == 2
@@ -53,7 +54,7 @@ else:
     text_type = unicode
     string_types = (str, unicode)
 
-logging.basicConfig(format='[%(levelname)s] %(message)s', level=logging.INFO,
+logging.basicConfig(format='[%(levelname)s] %(message)s', level=logging.DEBUG,
                     stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def process(cubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
             zlevel='median', cftype='weight', cfwidthSVD=100, cfwidthSP=50,
             pevals=[], nevals=[], optimizeType='normal', extSVD=None,
             skycubefits=None, svdoutputfits='ZAP_SVD.fits', mask=None,
-            interactive=False, instrument='MUSE'):
+            interactive=False, clobber=False, instrument='MUSE'):
     """ Performs the entire ZAP sky subtraction algorithm.
 
     Work on an input FITS file and optionally writes the product to an output
@@ -137,7 +138,8 @@ def process(cubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
         :meth:`~zap.zclass.reprocess` method). In this case, the output files
         are not saved (`outcubefits` and `skycubefits` are ignored). Default to
         False.
-
+    clobber : bool
+        If True (default False) write over any files.
     """
     if not isinstance(cubefits, string_types):
         raise TypeError('The process method only accepts a single datacube '
@@ -147,10 +149,10 @@ def process(cubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
     outcubefits = outcubefits.split('.fits')[0] + '.fits'
 
     # check if outcubefits/skycubefits exists before beginning
-    check_file_exists(outcubefits)
-    check_file_exists(skycubefits)
+    check_file_exists(outcubefits, clobber=clobber)
+    check_file_exists(skycubefits, clobber=clobber)
     if extSVD is None:
-        check_file_exists(svdoutputfits)
+        check_file_exists(svdoutputfits, clobber=clobber)
 
     # Check for consistency between weighted median and zlevel keywords
     if cftype == 'weight' and zlevel == 'none':
@@ -170,10 +172,10 @@ def process(cubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
         # twice the zlevel and continuumfilter steps.
         SVDoutput(cubefits, svdoutputfits=svdoutputfits,
                   clean=clean, zlevel=zlevel, cftype=cftype,
-                  cfwidth=cfwidthSVD, mask=mask)
+                  cfwidth=cfwidthSVD, mask=mask, instrument=instrument)
         extSVD = svdoutputfits
 
-    zobj = zclass(cubefits, instrument)
+    zobj = zclass(cubefits, instrument=instrument)
     zobj._run(clean=clean, zlevel=zlevel, cfwidth=cfwidthSP, cftype=cftype,
               pevals=pevals, nevals=nevals, optimizeType=optimizeType,
               extSVD=extSVD)
@@ -229,7 +231,7 @@ def SVDoutput(cubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
     if cftype == 'weight' and zlevel == 'none':
         raise ValueError('Weighted median requires a zlevel calculation')
 
-    zobj = zclass(cubefits, instrument)
+    zobj = zclass(cubefits, instrument=instrument)
 
     # clean up the nan values
     if clean:
@@ -256,7 +258,7 @@ def SVDoutput(cubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
     zobj.writeSVD(svdoutputfits=svdoutputfits)
 
 
-def contsubfits(cubefits, contsubfn='CONTSUB_CUBE.fits', cfwidth=100):
+def contsubfits(cubefits, contsubfn='CONTSUB_CUBE.fits', clobber=False, cfwidth=100):
     """ A multiprocessed implementation of the continuum removal.
 
     This process distributes the data to many processes that then reassemble
@@ -274,11 +276,11 @@ def contsubfits(cubefits, contsubfn='CONTSUB_CUBE.fits', cfwidth=100):
     # remove continuum features
     stack -= contarray
     hdu[1].data = stack.reshape(data.shape[0], data.shape[1], data.shape[2])
-    hdu.writeto(contsubfn)
+    hdu.writeto(contsubfn,clobber=clobber)
     hdu.close()
 
 
-def nancleanfits(cubefits, outfn='NANCLEAN_CUBE.fits', rejectratio=0.25,
+def nancleanfits(cubefits, outfn='NANCLEAN_CUBE.fits', clobber=False, rejectratio=0.25,
                  boxsz=1):
     """
     Detects NaN values in cube and removes them by replacing them with an
@@ -305,13 +307,16 @@ def nancleanfits(cubefits, outfn='NANCLEAN_CUBE.fits', rejectratio=0.25,
     hdu = fits.open(cubefits)
     cleancube = _nanclean(hdu[1].data, rejectratio=rejectratio, boxsz=boxsz)
     hdu[1].data = cleancube[0]
-    hdu.writeto(outfn)
+    hdu.writeto(outfn,clobber=clobber)
     hdu.close()
 
 
-def check_file_exists(filename):
+def check_file_exists(filename, clobber=False):
     if filename is not None and os.path.exists(filename):
-        raise IOError('Output file "{0}" exists'.format(filename))
+        if clobber is False:
+            raise IOError('Output file "{0}" exists'.format(filename))
+        else:
+            logger.info('Output file "{0}" exists, rewriting'.format(filename))            
 
 
 def timeit(func):
@@ -442,11 +447,15 @@ class zclass(object):
         laxmin = min(self.laxis)
         laxmax = max(self.laxis)
 
+        logger.debug('Minimum wavelength=%d, maximum wavelength=%d', laxmin, laxmax)
+
         # List of segmentation limits in the optical
         if instrument == 'MUSE':
-           skyseg = np.array(SKYSEG_MUSE)
+            logger.info('Setup for MUSE')
+            skyseg = np.array(SKYSEG_MUSE)
         elif instrument == 'KMOS':
-           skyseg = np.array(SKYSEG_KMOS)
+            logger.info('Setup for KMOS YJ')
+            skyseg = np.array(SKYSEG_KMOS_YJ)
         else:
             raise ValueError('None or invalid instrument name given')
 
@@ -459,10 +468,12 @@ class zclass(object):
         # segment limit in pixels
         laxis = self.laxis
         lranges = self.lranges
+
         pranges = []
         for i in range(len(lranges)):
             paxis = wlaxis[(laxis > lranges[i, 0]) & (laxis <= lranges[i, 1])]
             pranges.append((np.min(paxis), np.max(paxis) + 1))
+
         self.pranges = np.array(pranges)
 
         # eigenspace Subset
@@ -881,48 +892,48 @@ class zclass(object):
     ##################################### Output Functions ####################
     ###########################################################################
 
-    def writecube(self, outcubefits='DATACUBE_ZAP.fits'):
+    def writecube(self, outcubefits='DATACUBE_ZAP.fits', clobber=False):
         """Write the processed datacube to an individual fits file."""
 
-        check_file_exists(outcubefits)
+        check_file_exists(outcubefits,clobber=clobber)
         # fix up for writing
         outhead = _newheader(self)
 
         # create hdu and write
         outhdu = fits.PrimaryHDU(data=self.cleancube, header=outhead)
-        outhdu.writeto(outcubefits)
+        outhdu.writeto(outcubefits,clobber=clobber)
         logger.info('Cube file saved to %s', outcubefits)
 
-    def writeskycube(self, skycubefits='SKYCUBE_ZAP.fits'):
+    def writeskycube(self, skycubefits='SKYCUBE_ZAP.fits', clobber=False):
         """Write the processed datacube to an individual fits file."""
 
-        check_file_exists(skycubefits)
+        check_file_exists(skycubefits,clobber=clobber)
         # fix up for writing
         outcube = self.cube - self.cleancube
         outhead = _newheader(self)
 
         # create hdu and write
         outhdu = fits.PrimaryHDU(data=outcube, header=outhead)
-        outhdu.writeto(skycubefits)
+        outhdu.writeto(skycubefits,clobber=clobber)
         logger.info('Sky cube file saved to %s', skycubefits)
 
-    def mergefits(self, outcubefits):
+    def mergefits(self, outcubefits, clobber=False):
         """Merge the ZAP cube into the full muse datacube and write."""
 
         # make sure it has the right extension
         outcubefits = outcubefits.split('.fits')[0] + '.fits'
-        check_file_exists(outcubefits)
+        check_file_exists(outcubefits,clobber=clobber)
         hdu = fits.open(self.cubefits)
         hdu[1].header = _newheader(self)
         hdu[1].data = self.cleancube
-        hdu.writeto(outcubefits)
+        hdu.writeto(outcubefits,clobber=clobber)
         hdu.close()
         logger.info('Cube file saved to %s', outcubefits)
 
-    def writeSVD(self, svdoutputfits='ZAP_SVD.fits'):
+    def writeSVD(self, svdoutputfits='ZAP_SVD.fits', clobber=False):
         """Write the SVD to an individual fits file."""
 
-        check_file_exists(svdoutputfits)
+        check_file_exists(svdoutputfits,clobber=clobber)
         header = fits.Header()
         header['ZAPvers'] = (__version__, 'ZAP version')
         header['ZAPzlvl'] = (self.run_zlevel, 'ZAP zero level correction')
@@ -938,7 +949,7 @@ class zclass(object):
         for i in range(len(self.pranges)):
             hdu.append(fits.ImageHDU(self.especeval[i][0]))
         # write for later use
-        hdu.writeto(svdoutputfits)
+        hdu.writeto(svdoutputfits,clobber=clobber)
         logger.info('SVD file saved to %s', svdoutputfits)
 
     def plotvarcurve(self, i=0, ax=None):
@@ -1237,8 +1248,9 @@ def _nanclean(cube, rejectratio=0.25, boxsz=1):
     """
     logger.info('Cleaning NaN values in the cube')
     cleancube = cube.copy()
-    badcube = np.logical_not(np.isfinite(cleancube))        # find NaNs
-    badmap = badcube.sum(axis=0)  # map of total nans in a spaxel
+    # badcube  = np.logical_not(np.isfinite(cleancube))        # find NaNs
+    badcube  = np.logical_or(np.isnan(cleancube), cleancube == 0.) # Cut NaNs and unphysical zero flux
+    badmap   = badcube.sum(axis=0)                           # map of total nans in a spaxel
 
     # choose some maximum number of bad pixels in the spaxel and extract
     # positions
