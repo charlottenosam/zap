@@ -41,7 +41,7 @@ from .version import __version__
 
 # Limits of the segments in Angstroms
 SKYSEG_MUSE    = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
-SKYSEG_KMOS_YJ = [10220, 10610, 10800, 11180, 11400, 11900, 12100, 12500, 12880, 13450]
+SKYSEG_KMOS_YJ = [10220, 10610, 10800, 11180, 11400, 11900, 12100, 12500, 12880, 13440]
 
 # Number of available CPUs
 NCPU = cpu_count()
@@ -170,12 +170,12 @@ def process(cubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
         # cfwidth values differ and extSVD is not given. Otherwise, the SVD
         # will be computed in the _run method, which allows to avoid running
         # twice the zlevel and continuumfilter steps.
-        SVDoutput(cubefits, svdoutputfits=svdoutputfits,
+        SVDoutput(cubefits=cubefits, svdoutputfits=svdoutputfits,
                   clean=clean, zlevel=zlevel, cftype=cftype,
                   cfwidth=cfwidthSVD, mask=mask, instrument=instrument)
         extSVD = svdoutputfits
 
-    zobj = zclass(cubefits, instrument=instrument)
+    zobj = zclass(cubefits=cubefits, instrument=instrument)
     zobj._run(clean=clean, zlevel=zlevel, cfwidth=cfwidthSP, cftype=cftype,
               pevals=pevals, nevals=nevals, optimizeType=optimizeType,
               extSVD=extSVD)
@@ -187,15 +187,15 @@ def process(cubefits, outcubefits='DATACUBE_ZAP.fits', clean=True,
     if zobj.run_zlevel != 'extSVD' and svdoutputfits is not None:
         # Save SVD only if it was computed in _run, i.e. if an external SVD
         # was not given
-        zobj.writeSVD(svdoutputfits=svdoutputfits)
+        zobj.writeSVD(svdoutputfits=svdoutputfits, clobber=clobber)
     if skycubefits is not None:
         zobj.writeskycube(skycubefits=skycubefits)
 
     zobj.mergefits(outcubefits)
 
 
-def SVDoutput(cubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
-              zlevel='median', cftype='weight', cfwidth=100, mask=None, instrument='MUSE'):
+def SVDoutput(cubefits=None, cube=None, hdr=None, svdoutputfits='ZAP_SVD.fits', clean=True,
+              zlevel='median', cftype='weight', cfwidth=100, mask=None, maskfits=False, clobber=False, instrument='MUSE'):
     """ Performs the SVD decomposition of a datacube.
 
     This allows to use the SVD for a different datacube.
@@ -225,13 +225,13 @@ def SVDoutput(cubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
     """
     logger.info('Running ZAP %s !', __version__)
     logger.info('Processing %s to compute the SVD', cubefits)
-    check_file_exists(svdoutputfits)
+    check_file_exists(svdoutputfits, clobber=clobber)
 
     # Check for consistency between weighted median and zlevel keywords
     if cftype == 'weight' and zlevel == 'none':
         raise ValueError('Weighted median requires a zlevel calculation')
 
-    zobj = zclass(cubefits, instrument=instrument)
+    zobj = zclass(cubefits=cubefits, cube=cube, hdr=hdr, instrument=instrument)
 
     # clean up the nan values
     if clean:
@@ -239,7 +239,7 @@ def SVDoutput(cubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
 
     # if mask is supplied, apply it
     if mask is not None:
-        zobj._applymask(mask)
+        zobj._applymask(mask, maskfits=maskfits)
 
     # Extract the spectra that we will be working with
     zobj._extract()
@@ -255,7 +255,7 @@ def SVDoutput(cubefits, svdoutputfits='ZAP_SVD.fits', clean=True,
     zobj._msvd()
 
     # write to file
-    zobj.writeSVD(svdoutputfits=svdoutputfits)
+    zobj.writeSVD(svdoutputfits=svdoutputfits, clobber=clobber)
 
 
 def contsubfits(cubefits, contsubfn='CONTSUB_CUBE.fits', clobber=False, cfwidth=100):
@@ -393,18 +393,26 @@ class zclass(object):
 
     """
 
-    def __init__(self, cubefits, instrument='MUSE'):
+    def __init__(self, cubefits=None, cube=None, hdr=None, instrument='MUSE'):
         """ Initialization of the zclass.
 
         Pulls the datacube into the class and trims it based on the known
         optimal spectral range of MUSE.
 
         """
-        hdu = fits.open(cubefits)
-        self.cube = hdu[1].data
-        self.header = hdu[1].header
-        self.cubefits = cubefits
-        hdu.close()
+        # If hdu cube + header is supplied
+        if cube is not None:
+            self.cube     = cube
+            self.header   = hdr
+            self.cubefits = cubefits
+        
+        # If there is only a cubefits file
+        else:
+            hdu = fits.open(cubefits)
+            self.cube     = hdu[1].data
+            self.header   = hdu[1].header
+            self.cubefits = cubefits
+            hdu.close()
 
         # Workaround for floating points errors in wcs computation: if cunit is
         # specified, wcslib will convert in meters instead of angstroms, so we
@@ -871,7 +879,7 @@ class zclass(object):
         self.especeval = especeval
         hdu.close()
 
-    def _applymask(self, mask):
+    def _applymask(self, mask, maskfits=True):
         """Apply a mask to the input data to provide a cleaner basis set.
 
         mask is >1 for objects, 0 for sky so that people can use sextractor.
@@ -879,10 +887,13 @@ class zclass(object):
         read the primary extension, then the first extension is no data was
         found before.
 
+        If maskfits is False, input mask can be 2D array, not fits file
+
         """
         logger.info('Applying Mask for SVD Calculation from %s', mask)
-        self.maskfile = mask
-        mask = fits.getdata(mask).astype(bool)
+        if maskfits:
+            self.maskfile = mask
+            mask = fits.getdata(mask).astype(bool)
         nmasked = np.count_nonzero(mask)
         logger.info('Masking %d pixels (%d%%)', nmasked,
                     nmasked / np.prod(mask.shape) * 100)
