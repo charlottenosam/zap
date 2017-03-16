@@ -41,7 +41,7 @@ from .version import __version__
 
 # Limits of the segments in Angstroms
 SKYSEG_MUSE    = [0, 5400, 5850, 6440, 6750, 7200, 7700, 8265, 8602, 8731, 9275, 10000]
-SKYSEG_KMOS_YJ = [10220, 10610, 10800, 11180, 11400, 11900, 12100, 12500, 12880, 13440]
+SKYSEG_KMOS_YJ = [0., 10260., 10610, 10800, 11180, 11400, 11900, 12100, 12500, 12880, 13400., 13588.]
 
 # Number of available CPUs
 NCPU = cpu_count()
@@ -370,6 +370,7 @@ class zclass(object):
         An array for each segment with the variance curve, calculated for the
         optimize method.
     pranges : numpy.ndarray
+
         The pixel indices of the bounding regions for each spectral segment.
     recon : numpy.ndarray
         A 2d array containing the reconstructed emission line residuals.
@@ -479,6 +480,7 @@ class zclass(object):
 
         pranges = []
         for i in range(len(lranges)):
+            logger.debug('Lranges: %.0f, %.0f',lranges[i, 0],lranges[i, 1])
             paxis = wlaxis[(laxis > lranges[i, 0]) & (laxis <= lranges[i, 1])]
             pranges.append((np.min(paxis), np.max(paxis) + 1))
 
@@ -865,6 +867,7 @@ class zclass(object):
 
         for i in range(nseg):
             pmin, pmax = self.pranges[i]
+            logger.debug('pmin=%.0f, pmax=%.0f',pmin,pmax)
             self.variancearray[i, :] = np.var(self.normstack[pmin:pmax, :],
                                               axis=0)
             self.normstack[pmin:pmax, :] /= self.variancearray[i, :]
@@ -1189,6 +1192,10 @@ def _ivarcurve(i, istack, especeval=None, variancearray=None):
     totalnevals = int(np.round(evals.shape[0] * 0.25))
 
     progress_step = int(totalnevals * .2)
+
+    logger.debug('totalnevals %s',totalnevals)
+    logger.debug('progress_step %s',progress_step)
+
     to_percent = 100. / (totalnevals - 1.)
     info = logger.info
 
